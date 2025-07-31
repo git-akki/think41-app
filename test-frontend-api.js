@@ -1,11 +1,12 @@
-const fetch = require('node-fetch');
-
 const API_BASE_URL = 'http://localhost:3000/api';
 
 async function testFrontendAPI() {
   console.log('🧪 Testing Frontend API Connection\n');
   
   try {
+    // Dynamic import for node-fetch
+    const fetch = (await import('node-fetch')).default;
+    
     // Test health endpoint
     console.log('1. Testing Health Check...');
     const healthResponse = await fetch(`${API_BASE_URL}/health`);

@@ -5,19 +5,17 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Database connection
 const db = new sqlite3.Database('ecommerce.db');
 
-// Helper function to handle database errors
 const handleDatabaseError = (err, res) => {
   console.error('Database error:', err);
   res.status(500).json({
-    error: 'Internal server error',
-    message: 'Database operation failed'
+    success: false,
+    message: 'Database error occurred',
+    error: err.message
   });
 };
 
@@ -26,36 +24,41 @@ app.get('/api/products', (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const offset = (page - 1) * limit;
-  
-  // Get total count for pagination
-  db.get('SELECT COUNT(*) as total FROM products', (err, countResult) => {
-    if (err) {
-      return handleDatabaseError(err, res);
-    }
-    
-    // Get paginated products
-    const sql = `
-      SELECT id, cost, category, name, brand, retail_price, department, sku, distribution_center_id
-      FROM products
-      ORDER BY id
-      LIMIT ? OFFSET ?
-    `;
-    
-    db.all(sql, [limit, offset], (err, products) => {
-      if (err) {
-        return handleDatabaseError(err, res);
-      }
-      
-      const totalPages = Math.ceil(countResult.total / limit);
-      
+
+  const countQuery = 'SELECT COUNT(*) as total FROM products';
+  const productsQuery = `
+    SELECT 
+      p.id,
+      p.cost,
+      p.category,
+      p.name,
+      p.brand,
+      p.retail_price,
+      p.sku,
+      p.distribution_center_id,
+      d.name as department
+    FROM products p
+    LEFT JOIN departments d ON p.department_id = d.id
+    ORDER BY p.id
+    LIMIT ? OFFSET ?
+  `;
+
+  db.get(countQuery, (err, countResult) => {
+    if (err) return handleDatabaseError(err, res);
+
+    db.all(productsQuery, [limit, offset], (err, products) => {
+      if (err) return handleDatabaseError(err, res);
+
+      const totalProducts = countResult.total;
+      const totalPages = Math.ceil(totalProducts / limit);
+
       res.json({
         success: true,
         data: products,
         pagination: {
           currentPage: page,
           totalPages: totalPages,
-          totalProducts: countResult.total,
-          limit: limit,
+          totalProducts: totalProducts,
           hasNextPage: page < totalPages,
           hasPrevPage: page > 1
         }
@@ -64,73 +67,66 @@ app.get('/api/products', (req, res) => {
   });
 });
 
-// GET /api/products/search - Search products by name, category, or brand
+// GET /api/products/search - Search products by name, category, or brand (placed before :id)
 app.get('/api/products/search', (req, res) => {
-  const { q, category, brand, department } = req.query;
+  const query = req.query.q || '';
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const offset = (page - 1) * limit;
-  
-  let conditions = [];
-  let params = [];
-  
-  if (q) {
-    conditions.push('(name LIKE ? OR category LIKE ? OR brand LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+
+  if (!query.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Search query is required'
+    });
   }
+
+  const searchTerm = `%${query}%`;
   
-  if (category) {
-    conditions.push('category = ?');
-    params.push(category);
-  }
+  const countQuery = `
+    SELECT COUNT(*) as total 
+    FROM products p
+    LEFT JOIN departments d ON p.department_id = d.id
+    WHERE p.name LIKE ? OR p.category LIKE ? OR p.brand LIKE ? OR d.name LIKE ?
+  `;
   
-  if (brand) {
-    conditions.push('brand = ?');
-    params.push(brand);
-  }
-  
-  if (department) {
-    conditions.push('department = ?');
-    params.push(department);
-  }
-  
-  const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
-  
-  // Get total count for pagination
-  const countSql = `SELECT COUNT(*) as total FROM products ${whereClause}`;
-  db.get(countSql, params, (err, countResult) => {
-    if (err) {
-      return handleDatabaseError(err, res);
-    }
-    
-    // Get paginated search results
-    const sql = `
-      SELECT id, cost, category, name, brand, retail_price, department, sku, distribution_center_id
-      FROM products
-      ${whereClause}
-      ORDER BY id
-      LIMIT ? OFFSET ?
-    `;
-    
-    db.all(sql, [...params, limit, offset], (err, products) => {
-      if (err) {
-        return handleDatabaseError(err, res);
-      }
-      
-      const totalPages = Math.ceil(countResult.total / limit);
-      
+  const searchQuery = `
+    SELECT 
+      p.id,
+      p.cost,
+      p.category,
+      p.name,
+      p.brand,
+      p.retail_price,
+      p.sku,
+      p.distribution_center_id,
+      d.name as department
+    FROM products p
+    LEFT JOIN departments d ON p.department_id = d.id
+    WHERE p.name LIKE ? OR p.category LIKE ? OR p.brand LIKE ? OR d.name LIKE ?
+    ORDER BY p.id
+    LIMIT ? OFFSET ?
+  `;
+
+  db.get(countQuery, [searchTerm, searchTerm, searchTerm, searchTerm], (err, countResult) => {
+    if (err) return handleDatabaseError(err, res);
+
+    db.all(searchQuery, [searchTerm, searchTerm, searchTerm, searchTerm, limit, offset], (err, products) => {
+      if (err) return handleDatabaseError(err, res);
+
+      const totalProducts = countResult.total;
+      const totalPages = Math.ceil(totalProducts / limit);
+
       res.json({
         success: true,
         data: products,
         pagination: {
           currentPage: page,
           totalPages: totalPages,
-          totalProducts: countResult.total,
-          limit: limit,
+          totalProducts: totalProducts,
           hasNextPage: page < totalPages,
           hasPrevPage: page > 1
-        },
-        searchParams: { q, category, brand, department }
+        }
       });
     });
   });
@@ -139,32 +135,40 @@ app.get('/api/products/search', (req, res) => {
 // GET /api/products/:id - Get specific product by ID
 app.get('/api/products/:id', (req, res) => {
   const productId = parseInt(req.params.id);
-  
+
   if (isNaN(productId)) {
     return res.status(400).json({
-      error: 'Bad request',
-      message: 'Invalid product ID. Must be a number.'
+      success: false,
+      message: 'Invalid product ID'
     });
   }
-  
-  const sql = `
-    SELECT id, cost, category, name, brand, retail_price, department, sku, distribution_center_id
-    FROM products
-    WHERE id = ?
+
+  const query = `
+    SELECT 
+      p.id,
+      p.cost,
+      p.category,
+      p.name,
+      p.brand,
+      p.retail_price,
+      p.sku,
+      p.distribution_center_id,
+      d.name as department
+    FROM products p
+    LEFT JOIN departments d ON p.department_id = d.id
+    WHERE p.id = ?
   `;
-  
-  db.get(sql, [productId], (err, product) => {
-    if (err) {
-      return handleDatabaseError(err, res);
-    }
-    
+
+  db.get(query, [productId], (err, product) => {
+    if (err) return handleDatabaseError(err, res);
+
     if (!product) {
       return res.status(404).json({
-        error: 'Not found',
-        message: `Product with ID ${productId} not found`
+        success: false,
+        message: 'Product not found'
       });
     }
-    
+
     res.json({
       success: true,
       data: product
@@ -174,13 +178,11 @@ app.get('/api/products/:id', (req, res) => {
 
 // GET /api/categories - Get all unique categories
 app.get('/api/categories', (req, res) => {
-  const sql = 'SELECT DISTINCT category FROM products ORDER BY category';
-  
-  db.all(sql, [], (err, categories) => {
-    if (err) {
-      return handleDatabaseError(err, res);
-    }
-    
+  const query = 'SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != "" ORDER BY category';
+
+  db.all(query, (err, categories) => {
+    if (err) return handleDatabaseError(err, res);
+
     res.json({
       success: true,
       data: categories.map(cat => cat.category)
@@ -190,16 +192,85 @@ app.get('/api/categories', (req, res) => {
 
 // GET /api/brands - Get all unique brands
 app.get('/api/brands', (req, res) => {
-  const sql = 'SELECT DISTINCT brand FROM products ORDER BY brand';
-  
-  db.all(sql, [], (err, brands) => {
-    if (err) {
-      return handleDatabaseError(err, res);
-    }
-    
+  const query = 'SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL AND brand != "" ORDER BY brand';
+
+  db.all(query, (err, brands) => {
+    if (err) return handleDatabaseError(err, res);
+
     res.json({
       success: true,
       data: brands.map(brand => brand.brand)
+    });
+  });
+});
+
+// GET /api/departments - Get all departments
+app.get('/api/departments', (req, res) => {
+  const query = 'SELECT id, name FROM departments ORDER BY name';
+
+  db.all(query, (err, departments) => {
+    if (err) return handleDatabaseError(err, res);
+
+    res.json({
+      success: true,
+      data: departments
+    });
+  });
+});
+
+// GET /api/departments/:id/products - Get products by department
+app.get('/api/departments/:id/products', (req, res) => {
+  const departmentId = parseInt(req.params.id);
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+
+  if (isNaN(departmentId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid department ID'
+    });
+  }
+
+  const countQuery = 'SELECT COUNT(*) as total FROM products WHERE department_id = ?';
+  const productsQuery = `
+    SELECT 
+      p.id,
+      p.cost,
+      p.category,
+      p.name,
+      p.brand,
+      p.retail_price,
+      p.sku,
+      p.distribution_center_id,
+      d.name as department
+    FROM products p
+    LEFT JOIN departments d ON p.department_id = d.id
+    WHERE p.department_id = ?
+    ORDER BY p.id
+    LIMIT ? OFFSET ?
+  `;
+
+  db.get(countQuery, [departmentId], (err, countResult) => {
+    if (err) return handleDatabaseError(err, res);
+
+    db.all(productsQuery, [departmentId, limit, offset], (err, products) => {
+      if (err) return handleDatabaseError(err, res);
+
+      const totalProducts = countResult.total;
+      const totalPages = Math.ceil(totalProducts / limit);
+
+      res.json({
+        success: true,
+        data: products,
+        pagination: {
+          currentPage: page,
+          totalPages: totalPages,
+          totalProducts: totalProducts,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      });
     });
   });
 });
@@ -217,8 +288,8 @@ app.get('/api/health', (req, res) => {
 // 404 handler for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({
-    error: 'Not found',
-    message: `Route ${req.originalUrl} not found`
+    success: false,
+    message: 'Route not found'
   });
 });
 
@@ -226,29 +297,23 @@ app.use('*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
   res.status(500).json({
-    error: 'Internal server error',
-    message: 'Something went wrong on the server'
+    success: false,
+    message: 'Internal server error',
+    error: err.message
   });
 });
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`🚀 E-commerce API server running on http://localhost:${PORT}`);
-  console.log(`📊 Database: Connected to ecommerce.db`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`📦 Products API: http://localhost:${PORT}/api/products`);
-  console.log('✅ Milestone 2: REST API for Products is ready!');
+  console.log('🚀 E-commerce API server running on http://localhost:3000');
+  console.log('📊 Database: Connected to ecommerce.db');
+  console.log('🔗 Health check: http://localhost:3000/api/health');
+  console.log('📦 Products API: http://localhost:3000/api/products');
+  console.log('🏢 Departments API: http://localhost:3000/api/departments');
+  console.log('✅ Milestone 4: Database refactoring completed!');
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down server...');
-  db.close((err) => {
-    if (err) {
-      console.error('Error closing database:', err);
-    } else {
-      console.log('✅ Database connection closed');
-    }
-    process.exit(0);
-  });
+  db.close();
+  process.exit(0);
 }); 

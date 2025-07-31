@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import apiService from '../services/api';
 import './ProductList.css';
 
@@ -12,21 +12,16 @@ const ProductList = ({ onProductClick }) => {
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('');
 
-  useEffect(() => {
-    loadCategories();
-    loadProducts();
-  }, [currentPage, selectedCategory]);
-
-  const loadCategories = async () => {
+  const loadCategories = useCallback(async () => {
     try {
       const response = await apiService.getCategories();
       setCategories(response.data);
     } catch (error) {
       console.error('Failed to load categories:', error);
     }
-  };
+  }, []);
 
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -45,7 +40,12 @@ const ProductList = ({ onProductClick }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchQuery, currentPage]);
+
+  useEffect(() => {
+    loadCategories();
+    loadProducts();
+  }, [loadCategories, loadProducts]);
 
   const handleSearch = (e) => {
     e.preventDefault();
