@@ -204,21 +204,97 @@ app.get('/api/brands', (req, res) => {
   });
 });
 
-// GET /api/departments - Get all departments
+// ===== MILESTONE 5: DEPARTMENTS API ENDPOINTS =====
+
+// GET /api/departments - List all departments with product count
 app.get('/api/departments', (req, res) => {
-  const query = 'SELECT id, name FROM departments ORDER BY name';
+  const query = `
+    SELECT 
+      d.id,
+      d.name,
+      COUNT(p.id) as product_count,
+      AVG(p.retail_price) as avg_price,
+      MIN(p.retail_price) as min_price,
+      MAX(p.retail_price) as max_price
+    FROM departments d
+    LEFT JOIN products p ON d.id = p.department_id
+    GROUP BY d.id, d.name
+    ORDER BY d.name
+  `;
 
   db.all(query, (err, departments) => {
     if (err) return handleDatabaseError(err, res);
 
     res.json({
       success: true,
-      data: departments
+      departments: departments.map(dept => ({
+        id: dept.id,
+        name: dept.name,
+        product_count: dept.product_count,
+        avg_price: dept.avg_price ? parseFloat(dept.avg_price.toFixed(2)) : 0,
+        min_price: dept.min_price ? parseFloat(dept.min_price) : 0,
+        max_price: dept.max_price ? parseFloat(dept.max_price) : 0
+      }))
     });
   });
 });
 
-// GET /api/departments/:id/products - Get products by department
+// GET /api/departments/:id - Get specific department details
+app.get('/api/departments/:id', (req, res) => {
+  const departmentId = parseInt(req.params.id);
+
+  if (isNaN(departmentId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid department ID'
+    });
+  }
+
+  const query = `
+    SELECT 
+      d.id,
+      d.name,
+      d.created_at,
+      COUNT(p.id) as product_count,
+      AVG(p.retail_price) as avg_price,
+      MIN(p.retail_price) as min_price,
+      MAX(p.retail_price) as max_price,
+      COUNT(DISTINCT p.brand) as unique_brands,
+      COUNT(DISTINCT p.category) as unique_categories
+    FROM departments d
+    LEFT JOIN products p ON d.id = p.department_id
+    WHERE d.id = ?
+    GROUP BY d.id, d.name, d.created_at
+  `;
+
+  db.get(query, [departmentId], (err, department) => {
+    if (err) return handleDatabaseError(err, res);
+
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        message: 'Department not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      department: {
+        id: department.id,
+        name: department.name,
+        created_at: department.created_at,
+        product_count: department.product_count,
+        avg_price: department.avg_price ? parseFloat(department.avg_price.toFixed(2)) : 0,
+        min_price: department.min_price ? parseFloat(department.min_price) : 0,
+        max_price: department.max_price ? parseFloat(department.max_price) : 0,
+        unique_brands: department.unique_brands,
+        unique_categories: department.unique_categories
+      }
+    });
+  });
+});
+
+// GET /api/departments/:id/products - Get all products in a department
 app.get('/api/departments/:id/products', (req, res) => {
   const departmentId = parseInt(req.params.id);
   const page = parseInt(req.query.page) || 1;
@@ -232,44 +308,57 @@ app.get('/api/departments/:id/products', (req, res) => {
     });
   }
 
-  const countQuery = 'SELECT COUNT(*) as total FROM products WHERE department_id = ?';
-  const productsQuery = `
-    SELECT 
-      p.id,
-      p.cost,
-      p.category,
-      p.name,
-      p.brand,
-      p.retail_price,
-      p.sku,
-      p.distribution_center_id,
-      d.name as department
-    FROM products p
-    LEFT JOIN departments d ON p.department_id = d.id
-    WHERE p.department_id = ?
-    ORDER BY p.id
-    LIMIT ? OFFSET ?
-  `;
-
-  db.get(countQuery, [departmentId], (err, countResult) => {
+  // First, check if department exists
+  db.get('SELECT id, name FROM departments WHERE id = ?', [departmentId], (err, department) => {
     if (err) return handleDatabaseError(err, res);
 
-    db.all(productsQuery, [departmentId, limit, offset], (err, products) => {
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        message: 'Department not found'
+      });
+    }
+
+    const countQuery = 'SELECT COUNT(*) as total FROM products WHERE department_id = ?';
+    const productsQuery = `
+      SELECT 
+        p.id,
+        p.cost,
+        p.category,
+        p.name,
+        p.brand,
+        p.retail_price,
+        p.sku,
+        p.distribution_center_id,
+        d.name as department
+      FROM products p
+      LEFT JOIN departments d ON p.department_id = d.id
+      WHERE p.department_id = ?
+      ORDER BY p.id
+      LIMIT ? OFFSET ?
+    `;
+
+    db.get(countQuery, [departmentId], (err, countResult) => {
       if (err) return handleDatabaseError(err, res);
 
-      const totalProducts = countResult.total;
-      const totalPages = Math.ceil(totalProducts / limit);
+      db.all(productsQuery, [departmentId, limit, offset], (err, products) => {
+        if (err) return handleDatabaseError(err, res);
 
-      res.json({
-        success: true,
-        data: products,
-        pagination: {
-          currentPage: page,
-          totalPages: totalPages,
-          totalProducts: totalProducts,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        }
+        const totalProducts = countResult.total;
+        const totalPages = Math.ceil(totalProducts / limit);
+
+        res.json({
+          success: true,
+          department: department.name,
+          products: products,
+          pagination: {
+            currentPage: page,
+            totalPages: totalPages,
+            totalProducts: totalProducts,
+            hasNextPage: page < totalPages,
+            hasPrevPage: page > 1
+          }
+        });
       });
     });
   });
@@ -281,7 +370,13 @@ app.get('/api/health', (req, res) => {
     success: true,
     message: 'E-commerce API is running',
     timestamp: new Date().toISOString(),
-    database: 'Connected'
+    database: 'Connected',
+    endpoints: {
+      products: '/api/products',
+      departments: '/api/departments',
+      categories: '/api/categories',
+      brands: '/api/brands'
+    }
   });
 });
 
@@ -309,7 +404,7 @@ app.listen(PORT, () => {
   console.log('🔗 Health check: http://localhost:3000/api/health');
   console.log('📦 Products API: http://localhost:3000/api/products');
   console.log('🏢 Departments API: http://localhost:3000/api/departments');
-  console.log('✅ Milestone 4: Database refactoring completed!');
+  console.log('✅ Milestone 5: Departments API completed!');
 });
 
 process.on('SIGINT', () => {
