@@ -1,98 +1,104 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import apiService from '../services/api';
 import './ProductList.css';
 
-const ProductList = ({ onProductClick }) => {
+const ProductList = () => {
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pagination, setPagination] = useState({});
-  const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    totalPages: 1,
+    totalProducts: 0,
+    limit: 20
+  });
+
+  const loadProducts = useCallback(async (page = 1) => {
+    try {
+      setLoading(true);
+      let response;
+      
+      if (searchQuery) {
+        response = await apiService.searchProducts(searchQuery, page, pagination.limit);
+      } else {
+        response = await apiService.getProducts(page, pagination.limit);
+      }
+      
+      if (response.success) {
+        setProducts(response.data);
+        setPagination({
+          currentPage: page,
+          totalPages: Math.ceil(response.pagination.total / pagination.limit),
+          totalProducts: response.pagination.total,
+          limit: pagination.limit
+        });
+      } else {
+        setError('Failed to load products');
+      }
+    } catch (err) {
+      setError('Error loading products: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [searchQuery, pagination.limit]);
 
   const loadCategories = useCallback(async () => {
     try {
       const response = await apiService.getCategories();
-      setCategories(response.data);
-    } catch (error) {
-      console.error('Failed to load categories:', error);
+      if (response.success) {
+        setCategories(response.categories);
+      }
+    } catch (err) {
+      console.error('Error loading categories:', err);
     }
   }, []);
 
-  const loadProducts = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      let response;
-      if (searchQuery) {
-        response = await apiService.searchProducts(searchQuery, currentPage, 20);
-      } else {
-        response = await apiService.getProducts(currentPage, 20);
-      }
-      
-      setProducts(response.data);
-      setPagination(response.pagination);
-    } catch (error) {
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [searchQuery, currentPage]);
-
   useEffect(() => {
     loadCategories();
-    loadProducts();
-  }, [loadCategories, loadProducts]);
+  }, [loadCategories]);
+
+  useEffect(() => {
+    loadProducts(1);
+  }, [loadProducts]);
 
   const handleSearch = (e) => {
     e.preventDefault();
-    setCurrentPage(1);
-    loadProducts();
+    loadProducts(1);
   };
 
-  const handleCategoryChange = (category) => {
-    setSelectedCategory(category);
-    setCurrentPage(1);
+  const handleCategoryChange = (e) => {
+    setSelectedCategory(e.target.value);
+    // You can implement category filtering here if needed
   };
 
-  const handleProductClick = (product) => {
-    onProductClick(product);
-  };
-
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(price);
+  const handlePageChange = (newPage) => {
+    loadProducts(newPage);
   };
 
   if (loading && products.length === 0) {
     return (
-      <div className="loading-container">
-        <div className="loading-spinner"></div>
-        <p>Loading products...</p>
+      <div className="product-list-container">
+        <div className="loading">Loading products...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="error-container">
-        <h2>Error</h2>
-        <p>{error}</p>
-        <button onClick={loadProducts} className="retry-button">
-          Retry
-        </button>
+      <div className="product-list-container">
+        <div className="error">Error: {error}</div>
       </div>
     );
   }
 
   return (
     <div className="product-list-container">
-      <div className="filters-section">
+      {/* Search and Filter Section */}
+      <div className="search-filter-section">
         <form onSubmit={handleSearch} className="search-form">
           <input
             type="text"
@@ -102,79 +108,72 @@ const ProductList = ({ onProductClick }) => {
             className="search-input"
           />
           <button type="submit" className="search-button">
-            🔍 Search
+            Search
           </button>
         </form>
-
-        <div className="category-filters">
-          <button
-            onClick={() => handleCategoryChange('')}
-            className={`category-button ${selectedCategory === '' ? 'active' : ''}`}
-          >
-            All Categories
-          </button>
-          {categories.slice(0, 10).map((category) => (
-            <button
-              key={category}
-              onClick={() => handleCategoryChange(category)}
-              className={`category-button ${selectedCategory === category ? 'active' : ''}`}
-            >
+        
+        <select
+          value={selectedCategory}
+          onChange={handleCategoryChange}
+          className="category-filter"
+        >
+          <option value="">All Categories</option>
+          {categories.map((category) => (
+            <option key={category} value={category}>
               {category}
-            </button>
+            </option>
           ))}
-        </div>
+        </select>
+      </div>
+
+      {/* Products Grid */}
+      <div className="products-header">
+        <h2>All Products</h2>
+        <p>Showing {products.length} of {pagination.totalProducts} products</p>
       </div>
 
       <div className="products-grid">
         {products.map((product) => (
           <div key={product.id} className="product-card">
-            <div className="product-image">
-              <div className="product-placeholder">
-                {product.name.charAt(0).toUpperCase()}
-              </div>
-            </div>
             <div className="product-info">
-              <h3 className="product-name">{product.name}</h3>
-              <p className="product-brand">{product.brand}</p>
-              <p className="product-category">{product.category}</p>
-              <p className="product-department">{product.department}</p>
-              <p className="product-price">{formatPrice(product.retail_price)}</p>
-              <button 
-                onClick={() => handleProductClick(product)} 
-                className="view-details-button"
-              >
-                View Details
-              </button>
+              <h3>{product.name}</h3>
+              <p className="brand">{product.brand}</p>
+              <p className="category">{product.category}</p>
+              <p className="department">{product.department}</p>
+              <p className="price">${product.retail_price}</p>
             </div>
+            <Link 
+              to={`/products/${product.id}`}
+              className="view-details-button"
+            >
+              View Details
+            </Link>
           </div>
         ))}
       </div>
 
-      {pagination && (
+      {/* Pagination */}
+      {pagination.totalPages > 1 && (
         <div className="pagination">
-          <button
-            onClick={() => setCurrentPage(currentPage - 1)}
-            disabled={!pagination.hasPrevPage}
+          <button 
+            onClick={() => handlePageChange(pagination.currentPage - 1)}
+            disabled={pagination.currentPage === 1}
             className="pagination-button"
           >
-            ← Previous
+            Previous
           </button>
-          <span className="pagination-info">
+          <span className="page-info">
             Page {pagination.currentPage} of {pagination.totalPages}
           </span>
-          <button
-            onClick={() => setCurrentPage(currentPage + 1)}
-            disabled={!pagination.hasNextPage}
+          <button 
+            onClick={() => handlePageChange(pagination.currentPage + 1)}
+            disabled={pagination.currentPage === pagination.totalPages}
             className="pagination-button"
           >
-            Next →
+            Next
           </button>
         </div>
       )}
-
-      <div className="results-info">
-        Showing {products.length} of {pagination.totalProducts || 0} products
-      </div>
     </div>
   );
 };
